@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S4CALC — SPARC4 exposure calculator</title>
+<meta name="description" content="Plan a SPARC4 acquisition: solve NEXP per channel, minimise dead time, and watch the progress bars before you are at the telescope.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="vi">
+  <div class="titlebar">
+    <span class="dot"></span>
+    <span>S4CALC.vi — SPARC4 exposure calculator &amp; acquisition simulator</span>
+    <span class="ver">v1.0</span>
+  </div>
+
+  <div class="body">
+
+    <!-- ================= SETUP ================= -->
+    <div class="top">
+
+      <section class="frame raised">
+        <h2>Detector setup <span class="hint">global — all four channels</span></h2>
+
+        <div class="grid2">
+          <label class="lbl" for="rate">Readout rate</label>
+          <select id="rate" class="sunken">
+            <option value="0.1">0.1 MHz — conventional, slow</option>
+            <option value="1.0" selected>1 MHz — conventional (default)</option>
+            <option value="10.0">10 MHz — EM, fast</option>
+            <option value="20.0">20 MHz — EM, fast+</option>
+            <option value="30.0">30 MHz — EM, super fast</option>
+          </select>
+
+          <label class="lbl">Frame transfer</label>
+          <div class="rocker sunken" id="ft" role="group" aria-label="Frame transfer">
+            <button type="button" data-v="0" class="on">OFF</button>
+            <button type="button" data-v="1">ON</button>
+          </div>
+
+          <label class="lbl">Read time</label>
+          <span class="readout sunken" id="tread">1.11 s</span>
+
+          <label class="lbl">Function</label>
+          <div class="rocker sunken" id="mode" role="group" aria-label="Function">
+            <button type="button" data-v="phot" class="on">Photometric</button>
+            <button type="button" data-v="polar">Polarimetric</button>
+          </div>
+
+          <label class="lbl">Trigger</label>
+          <div class="rocker sunken" id="trig" role="group" aria-label="Trigger">
+            <button type="button" data-v="sync" class="on">Sync by cycle</button>
+            <button type="button" data-v="async">Async</button>
+          </div>
+
+          <label class="lbl" for="ncyc">Cycles</label>
+          <input type="number" id="ncyc" class="sunken" min="1" max="100000" step="1" value="1">
+        </div>
+
+        <p class="note" id="ftnote"></p>
+      </section>
+
+      <section class="frame raised" id="wpframe">
+        <h2>Waveplate sequence <span class="hint">polarimetric only — one subcycle per position</span></h2>
+
+        <div class="grid2">
+          <label class="lbl">Retarder</label>
+          <div class="rocker sunken" id="wave" role="group" aria-label="Retarder">
+            <button type="button" data-v="half" class="on">λ/2 — linear</button>
+            <button type="button" data-v="quarter">λ/4 — circular</button>
+          </div>
+        </div>
+
+        <div class="wp sunken" id="wpgrid" role="group" aria-label="Waveplate positions"></div>
+
+        <div class="wp-row">
+          <button type="button" class="mini raised" data-wp="all">All 16</button>
+          <button type="button" class="mini raised" data-wp="8">First 8</button>
+          <button type="button" class="mini raised" data-wp="4">First 4</button>
+          <span class="duty" id="wpcount">16 positions → NSEQ = 16</span>
+        </div>
+
+        <p class="note">
+          Each active position is one subcycle. The waveplate steps between them, and
+          that step costs 1.44 s of dead time; the cycle ends with a further 1.70 s.
+          In photometry there is one subcycle per cycle and no waveplate.
+        </p>
+      </section>
+    </div>
+
+    <!-- ================= EXPOSURE TIMES ================= -->
+    <section class="frame raised">
+      <h2>Exposure times <span class="hint">yours to set — target, sky, airmass, moon, saturation</span></h2>
+      <div class="channels" id="texp"></div>
+
+      <div class="transport" style="margin-top:9px">
+        <button type="button" class="btn raised go" id="solve">Solve NEXP</button>
+        <button type="button" class="btn raised" id="manual">Edit NEXP by hand</button>
+        <span class="duty" id="solvenote">NEXP is the safe knob: it cannot saturate anything.</span>
+      </div>
+
+      <div class="msgs" id="msgs" style="margin-top:8px"></div>
+    </section>
+
+    <!-- ================= RESULT ================= -->
+    <section class="frame raised">
+      <h2>Acquisition</h2>
+      <div class="stats">
+        <div class="stat">
+          <div class="k">Subcycle (cadence)</div>
+          <span class="readout sunken big" id="s-cad">—</span>
+        </div>
+        <div class="stat">
+          <div class="k">Cycle</div>
+          <span class="readout sunken big" id="s-cyc">—</span>
+        </div>
+        <div class="stat">
+          <div class="k">Total run</div>
+          <span class="readout sunken big" id="s-tot">—</span>
+        </div>
+        <div class="stat">
+          <div class="k">Shutter open</div>
+          <span class="readout sunken big" id="s-duty">—</span>
+        </div>
+      </div>
+      <p class="note" id="gatenote"></p>
+    </section>
+
+    <!-- ================= SIMULATOR ================= -->
+    <section class="frame raised">
+      <h2>Acquisition monitor <span class="hint">what you will see in the S4GUI</span></h2>
+
+      <div class="transport">
+        <button type="button" class="btn raised go" id="start">START</button>
+        <button type="button" class="btn raised hold" id="pause" disabled>PAUSE</button>
+        <button type="button" class="btn raised stop" id="abort" disabled>ABORT</button>
+
+        <div class="speed">
+          <span class="lbl">Speed</span>
+          <div class="rocker sunken" id="speed" role="group" aria-label="Simulation speed">
+            <button type="button" data-v="1" class="on">1×</button>
+            <button type="button" data-v="10">10×</button>
+            <button type="button" data-v="60">60×</button>
+            <button type="button" data-v="600">600×</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="barstack" style="margin-top:9px">
+        <div class="bar sunken" id="b-elapsed"><span class="fill"></span><span class="txt">Elapsed 0.00 s / —</span></div>
+        <div class="bar sunken" id="b-cycle"><span class="fill"></span><span class="txt">#Cycles Done 0</span></div>
+        <div class="bar sunken" id="b-sub"><span class="fill"></span><span class="txt">#Pol. Seq. Done 0</span></div>
+      </div>
+
+      <p class="note" id="clocknote">
+        At 1× this runs in real time — a 5 s exposure takes 5 seconds. The multiplier
+        scales the clock, not the model.
+      </p>
+
+      <div class="channels" id="mon" style="margin-top:9px"></div>
+    </section>
+
+  </div>
+</div>
+
+<footer>
+  Timing from the SPARC4 Observer Guide (rev. 21-06-2025), §5.4–5.7.
+  FT-off model verified on-sky against stopwatch (AU Mic, 2026-07-13).
+  Dead times are the SPARC4 team's representative values, not exact.
+</footer>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
