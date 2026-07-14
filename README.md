@@ -15,6 +15,16 @@ Two jobs:
    listed reaches zero dead time; they differ only in what they do to
    saturation.
 
+   Any channel's NEXP can be **locked**. A lock says *this number is not
+   negotiable* — the science needs 15 frames, or a fixed cadence. The solver
+   then stops choosing an anchor for itself and fits every other channel under
+   the locked channel's wall time. Lock g at 15 x 3 s and r/i/z at 0.3 s will
+   come back with 43 each; the options table will then offer 44 at a slightly
+   trimmed exposure, which fills the locked cadence exactly.
+
+   The "closing the gap" options appear for hand-entered NEXP too, not just
+   solved ones — a manual NEXP has slack like any other.
+
 2. **Simulate the run.** The progress bars are the ones you will watch in the
    S4GUI. At 1× the clock is real: a 5 s exposure takes 5 seconds. The
    multiplier (up to 120×) scales the clock, not the model.

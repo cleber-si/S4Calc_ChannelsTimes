@@ -24,6 +24,7 @@ const S = {
   wp: Array(16).fill(true),      // active waveplate positions
   tExp: { g: 1.0, r: 1.0, i: 1.0, z: 1.0 },   // a neutral starting point
   nexp: { g: 1, r: 1, i: 1, z: 1 },
+  lock: { g: false, r: false, i: false, z: false },  // NEXP held fixed by the observer
   manual: false,
 };
 
@@ -31,6 +32,7 @@ const sim = new Sim();
 
 /* ---------------- derived ---------------- */
 const tRead = () => readTime(S.acq, S.size);
+const anyLocked = () => BANDS.some((b) => S.lock[b]);
 const nseq = () => (S.mode === "polar" ? Math.max(1, S.wp.filter(Boolean).length) : 1);
 
 function cfg() {
@@ -56,8 +58,12 @@ function buildInputs() {
                value="${S.tExp[b]}" aria-label="${b} exposure time seconds">
       </div>
       <div>
-        <div class="k" style="font-size:10px;color:var(--ink-mute);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">
-          NEXP <span class="srcflag" id="nexp-src-${b}"></span>
+        <div class="k lockrow">
+          <span>NEXP <span class="srcflag" id="nexp-src-${b}"></span></span>
+          <label class="lockbox" title="Hold this channel's NEXP fixed and fit the others under it">
+            <input type="checkbox" data-lock="${b}">
+            <span>lock</span>
+          </label>
         </div>
         <input type="number" class="sunken" data-n="${b}" min="1" max="${MAX_NEXP}" step="1"
                value="${S.nexp[b]}" disabled aria-label="${b} number of exposures">
@@ -151,9 +157,19 @@ function renderResult() {
     el.textContent =
       `wall ${p.wall.toFixed(2)} s · idle ${p.idle.toFixed(2)} s · ` +
       `duty ${(p.duty * 100).toFixed(0)}% · ${p.frames} frames`;
+
     const flag = $(`#nexp-src-${b}`);
-    flag.textContent = S.manual ? "— MANUAL" : "— SOLVED";
-    flag.className = "srcflag " + (S.manual ? "man" : "solved");
+    const src = S.lock[b] ? "LOCKED" : S.manual ? "MANUAL" : "SOLVED";
+    flag.textContent = `— ${src}`;
+    flag.className = "srcflag " + src.toLowerCase();
+
+    // A locked channel is always typeable: the lock is HOW you set it. An
+    // unlocked one is typeable only in manual mode.
+    const nIn = $(`#texp [data-n="${b}"]`);
+    nIn.disabled = !(S.lock[b] || S.manual);
+    nIn.classList.toggle("locked", S.lock[b]);
+    $(`[data-lock="${b}"]`).checked = S.lock[b];
+    $(`[data-b="${b}"]`).classList.toggle("islocked", S.lock[b]);
   }
 
   $("#s-cad").textContent = fmtDuration(a.cadence);
@@ -186,16 +202,15 @@ function renderResult() {
   $("#msgs").innerHTML = msgs.join("");
 
   // ---- step 2: how to spend the leftover slack ----
+  // Shown for BOTH solved and manual NEXP. A hand-entered NEXP has slack just
+  // like a solved one does, and the observer has no less right to see it.
   const optBox = $("#opts");
-  if (S.manual) {
-    optBox.innerHTML = `<p class="note">Manual NEXP. Solve NEXP to see the options for
-      closing the remaining gap.</p>`;
-  } else if (a.deadPerSeq <= 0.25) {
+  if (a.deadPerSeq <= 0.25) {
     optBox.innerHTML = `<p class="note">Dead time is already small
       (${a.deadPerSeq.toFixed(2)} s per subcycle across all four channels).
       Nothing else worth doing.</p>`;
   } else {
-    const opts = suggestOptions(S.tExp, S.nexp, tRead(), S.ft, a.cadence);
+    const opts = suggestOptions(S.tExp, S.nexp, tRead(), S.ft, a.cadence, S.lock);
     const rows = [];
     for (const b of BANDS) {
       if (!opts[b]) continue;
@@ -231,12 +246,17 @@ function renderResult() {
 
     optBox.innerHTML = rows.length
       ? `<p class="note">
-           The cadence is <b>${a.cadence.toFixed(2)} s</b>, set by <b>${a.gate}</b>. Every other
-           channel has slack. Each row below fills that slack exactly — they all reach zero dead
-           time — so the choice is only about what you want from the frames.
+           The cadence is <b>${a.cadence.toFixed(2)} s</b>, set by <b>${a.gate}</b>${
+             anyLocked() ? ` (locked)` : ``
+           }. Every other channel has slack. Each row below fills that slack exactly — they all
+           reach zero dead time — so the choice is only about what you want from the frames.
            <b>Fewer, longer frames</b> give better SNR per frame but push towards saturation;
            <b>more, shorter frames</b> give finer time resolution and pull away from it.
-           NEXP is safe. Changing t_exp is not — only you know the counts.
+           NEXP is safe. Changing t_exp is not — only you know the counts.${
+             anyLocked()
+               ? ` Locked channels are not listed: holding them fixed is the whole point.`
+               : ``
+           }
          </p>
          <table class="opts">
            <thead><tr>
@@ -325,8 +345,11 @@ function renderSim(st) {
 
 /* ---------------- the one place everything is recomputed ---------------- */
 function refresh({ resolve = false } = {}) {
-  if (resolve && !S.manual) {
-    const { nexp } = solveNexp(S.tExp, tRead(), S.ft);
+  // A locked channel keeps its NEXP through every re-solve; the solver fits the
+  // others under it. Locks are honoured even in manual mode, because the whole
+  // point of a lock is that it survives whatever else changes.
+  if (resolve && (!S.manual || anyLocked())) {
+    const { nexp } = solveNexp(S.tExp, tRead(), S.ft, S.nexp, S.lock);
     S.nexp = nexp;
     for (const b of BANDS) $(`#texp [data-n="${b}"]`).value = nexp[b];
   }
@@ -398,6 +421,16 @@ $$(".wp-row .mini").forEach((btn) => btn.addEventListener("click", () => {
   refresh();
 }));
 
+/* Locking a channel re-solves the others under it immediately -- the observer
+ * should see the consequence of the lock, not have to press a button to find it. */
+$("#texp").addEventListener("change", (e) => {
+  const b = e.target.dataset.lock;
+  if (!b) return;
+  S.lock[b] = e.target.checked;
+  sim.abort();
+  refresh({ resolve: true });
+});
+
 $("#texp").addEventListener("input", (e) => {
   const t = e.target.dataset.t, n = e.target.dataset.n;
   if (t) {
@@ -415,21 +448,23 @@ $("#texp").addEventListener("input", (e) => {
         `NEXP is capped at ${MAX_NEXP} per sequence (Guide 5.5). Use more cycles instead.`;
     }
     sim.abort();
-    refresh();
+    // Changing a LOCKED channel's NEXP moves the ceiling, so everyone else has
+    // to be refitted underneath it.
+    refresh({ resolve: S.lock[n] });
   }
 });
 
 $("#solve").addEventListener("click", () => {
   S.manual = false;
-  $$("#texp [data-n]").forEach((x) => (x.disabled = true));
-  $("#solvenote").textContent = "NEXP is the safe knob: it cannot saturate anything.";
+  $("#solvenote").textContent = anyLocked()
+    ? "Locked channels held fixed; the rest fitted underneath."
+    : "NEXP is the safe knob: it cannot saturate anything.";
   sim.abort();
   refresh({ resolve: true });
 });
 
 $("#manual").addEventListener("click", () => {
   S.manual = !S.manual;
-  $$("#texp [data-n]").forEach((x) => (x.disabled = !S.manual));
   $("#solvenote").textContent = S.manual
     ? "Manual NEXP. The cadence is whatever your numbers make it."
     : "NEXP is the safe knob: it cannot saturate anything.";
@@ -445,7 +480,6 @@ $("#opts").addEventListener("click", (e) => {
   S.tExp[b] = +btn.dataset.optT;
   S.nexp[b] = +btn.dataset.optN;
   S.manual = true;
-  $$("#texp [data-n]").forEach((x) => (x.disabled = false));
   $(`#texp [data-t="${b}"]`).value = S.tExp[b];
   $(`#texp [data-n="${b}"]`).value = S.nexp[b];
   $("#solvenote").textContent =

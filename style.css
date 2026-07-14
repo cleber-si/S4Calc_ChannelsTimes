@@ -386,12 +386,61 @@ input[data-n]:disabled {
   -webkit-text-fill-color: var(--bar);   /* Safari greys disabled text otherwise */
   opacity: 1;
 }
-.srcflag {
+/* A locked NEXP is an INPUT the observer owns, not an output. Amber, and
+ * editable -- so it must not borrow the blue "this is the answer" styling. */
+input[data-n].locked,
+input[data-n].locked:disabled {
+  background: #fffaf0;
+  color: var(--warn);
+  -webkit-text-fill-color: var(--warn);
+  border-left: 3px solid var(--warn);
   font-weight: 700;
-  letter-spacing: .04em;
+  font-size: 14px;
+  text-align: right;
 }
+
+.srcflag { font-weight: 700; letter-spacing: .04em; }
 .srcflag.solved { color: var(--bar); }
-.srcflag.man { color: var(--warn); }
+.srcflag.manual { color: var(--warn); }
+.srcflag.locked { color: var(--warn); }
+
+/* ---- the lock control ---- */
+.lockrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 2px;
+}
+.lockbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  user-select: none;
+  padding: 1px 4px;
+  background: var(--panel);
+  border-top: 1px solid var(--bevel-hi);
+  border-left: 1px solid var(--bevel-hi);
+  border-right: 1px solid var(--bevel-lo2);
+  border-bottom: 1px solid var(--bevel-lo2);
+}
+.lockbox:hover { background: var(--panel-light); }
+.lockbox input { margin: 0; cursor: pointer; }
+.lockbox span { font-weight: 600; }
+
+/* A locked channel is visibly pinned: amber rule down the card. */
+.ch.islocked {
+  box-shadow: inset 3px 0 0 var(--warn), inset 1px 1px 0 var(--bevel-lo);
+}
+.ch.islocked .lockbox {
+  background: var(--led-amber);
+  color: #3a2800;
+}
 
 /* ---- options table ----
  *

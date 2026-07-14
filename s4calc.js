@@ -140,16 +140,54 @@ export function seqTime(tExp, nExp, tRead, ft) {
 
 /* Choose NEXP per channel to minimise dead time.
  *
- * The anchor is physical: the channel with the LONGEST exposure cannot be
- * subdivided. Its single frame takes what it takes, and that is the shortest
- * sequence in which every channel gets at least one exposure. It sets the
- * floor; the faster channels pack in as many frames as fit underneath.
+ * WITHOUT LOCKS, the anchor is physical: the channel with the LONGEST exposure
+ * cannot be subdivided. Its single frame takes what it takes, and that is the
+ * shortest sequence in which every channel gets at least one exposure. It sets
+ * the floor; the faster channels pack in as many frames as fit underneath.
  *
  * Minimising ABSOLUTE dead time is degenerate -- a 300 s sequence always beats
  * a 6 s one because the fixed spread gets amortised. So the objective is dead
  * time as a FRACTION of the sequence, which is scale-free.
+ *
+ * WITH LOCKS, the observer has overridden that. A locked channel's NEXP is a
+ * given -- maybe the cadence is dictated by the science, maybe a collaborator
+ * needs exactly 15 frames -- so its wall time is a hard fact, and the solver's
+ * job collapses to a much simpler one: fit everybody else underneath it.
+ * The search over candidate ceilings is skipped entirely; the locked wall IS
+ * the ceiling. If several channels are locked, the slowest of them wins, since
+ * that is the one nobody can finish before.
+ *
+ *   locks: { g: true, ... } -- channels whose nexp[] must be taken as given
  */
-export function solveNexp(tExp, tRead, ft) {
+export function solveNexp(tExp, tRead, ft, nexp = null, locks = null) {
+  const locked = BANDS.filter((b) => locks?.[b] && nexp?.[b] >= 1);
+
+  if (locked.length) {
+    // The ceiling is the slowest locked channel. Everyone else packs under it.
+    const ceiling = Math.max(
+      ...locked.map((b) => seqTime(tExp[b], nexp[b], tRead, ft))
+    );
+
+    const out = {};
+    for (const b of BANDS) {
+      if (locks?.[b] && nexp?.[b] >= 1) {
+        out[b] = nexp[b];                       // untouched, by definition
+        continue;
+      }
+      // Largest n whose wall still fits inside the ceiling. Never overshoot:
+      // overshooting would push the cadence out past the lock, which would make
+      // the locked channel idle -- the opposite of what the lock is asking for.
+      let n = 1;
+      while (n < MAX_NEXP && seqTime(tExp[b], n + 1, tRead, ft) <= ceiling + 1e-9) n++;
+      out[b] = n;
+    }
+
+    const walls = {};
+    for (const b of BANDS) walls[b] = seqTime(tExp[b], out[b], tRead, ft);
+    return { nexp: out, walls, cadence: Math.max(...BANDS.map((b) => walls[b])) };
+  }
+
+  // --- no locks: the original search ---
   const anchor = Math.max(...BANDS.map((b) => seqTime(tExp[b], 1, tRead, ft)));
 
   const ceilings = new Set([anchor]);
@@ -163,20 +201,20 @@ export function solveNexp(tExp, tRead, ft) {
 
   let best = null;
   for (const ceiling of [...ceilings].sort((a, b) => a - b)) {
-    const nexp = {};
+    const out = {};
     for (const b of BANDS) {
       let n = 1;
       while (n < MAX_NEXP && seqTime(tExp[b], n + 1, tRead, ft) <= ceiling + 1e-9) n++;
-      nexp[b] = n;
+      out[b] = n;
     }
     const walls = {};
-    for (const b of BANDS) walls[b] = seqTime(tExp[b], nexp[b], tRead, ft);
+    for (const b of BANDS) walls[b] = seqTime(tExp[b], out[b], tRead, ft);
     const cadence = Math.max(...BANDS.map((b) => walls[b]));
     const dead = BANDS.reduce((s, b) => s + (cadence - walls[b]), 0);
     const key = [Number((dead / cadence).toFixed(5)), cadence];
     if (best === null || key[0] < best.key[0] ||
         (key[0] === best.key[0] && key[1] < best.key[1])) {
-      best = { key, nexp, walls, cadence };
+      best = { key, nexp: out, walls, cadence };
     }
   }
   return { nexp: best.nexp, walls: best.walls, cadence: best.cadence };
@@ -209,10 +247,14 @@ export function fillTexp(n, tRead, ft, cadence) {
  *
  * Returns { band: [ {nexp, tExp, dTexp, integ, dInteg, current, saturation} ] }
  */
-export function suggestOptions(tExp, nexp, tRead, ft, cadence) {
+export function suggestOptions(tExp, nexp, tRead, ft, cadence, locks = null) {
   const out = {};
 
   for (const b of BANDS) {
+    // A locked channel is not up for negotiation. Offering to change its NEXP
+    // would quietly undo the thing the observer just asked us to hold fixed.
+    if (locks?.[b]) continue;
+
     const n0 = nexp[b];
     const t0 = tExp[b];
     const integ0 = t0 * n0;
