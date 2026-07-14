@@ -2,8 +2,9 @@
 
 import {
   BANDS, CH_OF, READ_TIME, DT_FT, MAX_NEXP,
-  solveNexp, suggestTexp, acquisition, checkLimits, seqTime,
-  deadTimes, fmtDuration,
+  solveNexp, suggestOptions, acquisition, checkLimits, seqTime,
+  deadTimes, fmtDuration, readTime, minTexp, maxFPS,
+  ACQ_INFO, SIZE_MODES, SATURATION_ADU, READ_NOISE,
 } from "./s4calc.js";
 import { Sim, PHASE } from "./sim.js";
 
@@ -14,27 +15,29 @@ const BAND_NAME = { g: "g (Sloan g′)", r: "r (Sloan r′)", i: "i (Sloan i′)
 
 /* ---------------- state ---------------- */
 const S = {
-  rate: 1.0,
+  acq: "NORMAL FAINT",       // the common default
+  size: "LARGE_1",           // full frame, no binning
   ft: false,
   mode: "phot",
   trigger: "sync",
   ncyc: 1,
   wp: Array(16).fill(true),      // active waveplate positions
-  tExp: { g: 5.0, r: 0.9, i: 0.9, z: 0.5 },   // the AU Mic setup, as a start
-  nexp: { g: 1, r: 3, i: 3, z: 4 },
+  tExp: { g: 1.0, r: 1.0, i: 1.0, z: 1.0 },   // a neutral starting point
+  nexp: { g: 1, r: 1, i: 1, z: 1 },
   manual: false,
 };
 
 const sim = new Sim();
 
 /* ---------------- derived ---------------- */
-const tRead = () => READ_TIME[S.rate];
+const tRead = () => readTime(S.acq, S.size);
 const nseq = () => (S.mode === "polar" ? Math.max(1, S.wp.filter(Boolean).length) : 1);
 
 function cfg() {
   const [dtSeq, dtCyc] = deadTimes(S.mode, S.trigger);
   return {
     tExp: S.tExp, nexp: S.nexp, tRead: tRead(), ft: S.ft,
+    acq: S.acq, size: S.size,
     mode: S.mode, trigger: S.trigger,
     ncyc: S.ncyc, nseq: nseq(), dtSeq, dtCyc,
   };
@@ -54,7 +57,7 @@ function buildInputs() {
       </div>
       <div>
         <div class="k" style="font-size:10px;color:var(--ink-mute);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">
-          NEXP <span id="nexp-src-${b}"></span>
+          NEXP <span class="srcflag" id="nexp-src-${b}"></span>
         </div>
         <input type="number" class="sunken" data-n="${b}" min="1" max="${MAX_NEXP}" step="1"
                value="${S.nexp[b]}" disabled aria-label="${b} number of exposures">
@@ -96,10 +99,18 @@ function setBar(el, frac, text, ghost = false) {
 }
 
 function renderSetup() {
-  $("#tread").textContent = `${tRead()} s`;
+  const tr = tRead();
+  const info = ACQ_INFO[S.acq];
+  const sz = SIZE_MODES[S.size];
+  const sat = SATURATION_ADU[S.acq];
+
+  $("#tread").textContent = `${tr} s   (max ${maxFPS(S.acq, S.size).toFixed(2)} fps)`;
+  $("#tmin").textContent =
+    `${S.ft ? `${tr} s` : "1e-5 s"}  ·  ${sat.toLocaleString()} ADU`;
 
   const isPolar = S.mode === "polar";
   $("#wpframe").style.opacity = isPolar ? "1" : ".5";
+  $("#wpgrid").classList.toggle("off", !isPolar);
   $$("#wpgrid button, #wave button, .wp-row .mini").forEach((b) => (b.disabled = !isPolar));
 
   const n = S.wp.filter(Boolean).length;
@@ -107,19 +118,26 @@ function renderSetup() {
     ? `${n} position${n === 1 ? "" : "s"} → NSEQ = ${n}`
     : "photometry → NSEQ = 1, no waveplate";
 
+  // "on" = armed (dark green). "cur" (bright green) is applied by renderSim,
+  // and only while the acquisition is actually running.
   $$("#wpgrid button").forEach((btn, i) => {
     btn.classList.toggle("on", S.wp[i]);
     btn.setAttribute("aria-pressed", String(S.wp[i]));
+    btn.title = S.wp[i]
+      ? `Position ${i + 1}: in the sequence`
+      : `Position ${i + 1}: skipped`;
   });
 
   const note = $("#ftnote");
-  if (S.ft) {
-    note.textContent = `Frame transfer on: every exposure must be at least ${tRead()} s ` +
-      `(the read time), and the dead time between exposures drops to ${DT_FT} s.`;
-  } else {
-    note.textContent = `Frame transfer off: every exposure pays a full ${tRead()} s readout. ` +
-      `That is the price of exposures shorter than the read time.`;
-  }
+  const rn = READ_NOISE[S.acq];
+  const base =
+    `${info.em}, ${info.rate} MHz, ${info.preamp} · ${sz.label} · CCD at ${sz.tmin} °C or below · ` +
+    `read noise g ${rn.g} / r ${rn.r} / i ${rn.i} / z ${rn.z} e⁻. `;
+
+  note.textContent = base + (S.ft
+    ? `Frame transfer on: every exposure must be at least the ${tr} s read time, and the ` +
+      `dead time between exposures drops to ${DT_FT} s.`
+    : `Frame transfer off: every exposure pays a full ${tr} s readout.`);
 }
 
 function renderResult() {
@@ -133,7 +151,9 @@ function renderResult() {
     el.textContent =
       `wall ${p.wall.toFixed(2)} s · idle ${p.idle.toFixed(2)} s · ` +
       `duty ${(p.duty * 100).toFixed(0)}% · ${p.frames} frames`;
-    $(`#nexp-src-${b}`).textContent = S.manual ? "(manual)" : "(solved)";
+    const flag = $(`#nexp-src-${b}`);
+    flag.textContent = S.manual ? "— MANUAL" : "— SOLVED";
+    flag.className = "srcflag " + (S.manual ? "man" : "solved");
   }
 
   $("#s-cad").textContent = fmtDuration(a.cadence);
@@ -154,30 +174,84 @@ function renderResult() {
   for (const m of checkLimits(c)) {
     msgs.push(`<div class="msg ${m.level === "error" ? "err" : "warn"}">${m.msg}</div>`);
   }
-  if (!S.manual) {
-    const sug = suggestTexp(S.tExp, S.nexp, tRead(), S.ft, a.cadence);
-    const keys = Object.keys(sug);
-    if (a.deadPerSeq > 0.25 && keys.length) {
-      const parts = keys.map((b) => {
-        const gain = (sug[b] - S.tExp[b]) * S.nexp[b];
-        return `${b} ${S.tExp[b]}→${sug[b]} s (+${gain.toFixed(2)} s open)`;
-      });
-      msgs.push(
-        `<div class="msg ok">Optional, if you have room before saturation: ` +
-        `${parts.join(", ")}. Same NEXP, same cadence. NEXP is safe to change; this is not.</div>`
-      );
-    } else if (a.deadPerSeq <= 0.25) {
-      msgs.push(`<div class="msg ok">Dead time is already small. Nothing else worth doing.</div>`);
-    }
-  }
   if (!S.ft && BANDS.some((b) => S.tExp[b] < tRead())) {
     const short = BANDS.filter((b) => S.tExp[b] < tRead());
     msgs.push(
       `<div class="msg">${short.join(", ")} ${short.length === 1 ? "is" : "are"} shorter than the ` +
-      `${tRead()} s read time, so frame transfer is impossible at ${S.rate} MHz.</div>`
+      `${tRead()} s read time, so frame transfer is impossible in ${S.acq} / ` +
+      `${SIZE_MODES[S.size].label} and every frame pays a full readout. That is the ` +
+      `price of fast exposures — a smaller size mode or binning would cut the readout.</div>`
     );
   }
   $("#msgs").innerHTML = msgs.join("");
+
+  // ---- step 2: how to spend the leftover slack ----
+  const optBox = $("#opts");
+  if (S.manual) {
+    optBox.innerHTML = `<p class="note">Manual NEXP. Solve NEXP to see the options for
+      closing the remaining gap.</p>`;
+  } else if (a.deadPerSeq <= 0.25) {
+    optBox.innerHTML = `<p class="note">Dead time is already small
+      (${a.deadPerSeq.toFixed(2)} s per subcycle across all four channels).
+      Nothing else worth doing.</p>`;
+  } else {
+    const opts = suggestOptions(S.tExp, S.nexp, tRead(), S.ft, a.cadence);
+    const rows = [];
+    for (const b of BANDS) {
+      if (!opts[b]) continue;
+      opts[b].forEach((o, k) => {
+        const sat =
+          o.saturation === "up"
+            ? `<span class="sat up">↑ brighter frames</span>`
+            : o.saturation === "down"
+            ? `<span class="sat down">↓ darker frames</span>`
+            : `<span class="sat same">unchanged</span>`;
+        // first row of each channel gets a rule above it, so the 2-3 options
+        // for one band read as a group rather than as one long list
+        const cls = [o.current ? "cur" : "", k === 0 && rows.length ? "group" : ""]
+          .filter(Boolean).join(" ");
+        rows.push(`
+          <tr class="${cls}">
+            <td class="bcell">${k === 0 ? `<b>${b}</b>` : ""}</td>
+            <td class="num">${o.tExp.toFixed(2)}</td>
+            <td class="num">${o.nexp}</td>
+            <td class="num">${o.integ.toFixed(2)}</td>
+            <td class="num ${o.dInteg > 0.005 ? "pos" : o.dInteg < -0.005 ? "neg" : ""}">${
+              o.dInteg >= 0 ? "+" : "−"}${Math.abs(o.dInteg).toFixed(2)}</td>
+            <td class="scell">${sat}</td>
+            <td class="acell">${
+              o.current
+                ? `<span class="curtag">set now</span>`
+                : `<button type="button" class="mini raised" data-apply="${b}"
+                     data-opt-t="${o.tExp}" data-opt-n="${o.nexp}">Use</button>`
+            }</td>
+          </tr>`);
+      });
+    }
+
+    optBox.innerHTML = rows.length
+      ? `<p class="note">
+           The cadence is <b>${a.cadence.toFixed(2)} s</b>, set by <b>${a.gate}</b>. Every other
+           channel has slack. Each row below fills that slack exactly — they all reach zero dead
+           time — so the choice is only about what you want from the frames.
+           <b>Fewer, longer frames</b> give better SNR per frame but push towards saturation;
+           <b>more, shorter frames</b> give finer time resolution and pull away from it.
+           NEXP is safe. Changing t_exp is not — only you know the counts.
+         </p>
+         <table class="opts">
+           <thead><tr>
+             <th class="b">Ch</th>
+             <th class="n">t_exp (s)</th>
+             <th class="n">NEXP</th>
+             <th class="n" title="t_exp × NEXP — shutter-open time per subcycle">Open (s)</th>
+             <th class="n">vs now</th>
+             <th class="s">Saturation</th>
+             <th class="a"></th>
+           </tr></thead>
+           <tbody>${rows.join("")}</tbody>
+         </table>`
+      : `<p class="note">No option closes the gap within the instrument's limits.</p>`;
+  }
 
   // hand the frozen config to the simulator
   sim.load(c);
@@ -199,13 +273,19 @@ function renderSim(st) {
     (S.mode === "polar" ? `   ·   WP position ${st.sub.i}` : ""),
     st.inSeqGap || st.inCycGap);
 
-  // highlight the live waveplate position
-  $$("#wpgrid button").forEach((btn, i) => {
-    const active = S.wp[i];
+  // Light the waveplate position the instrument is actually sitting at. During
+  // the 1.44 s inter-sequence gap the plate is in transit between positions, so
+  // nothing is lit -- that gap is exactly what the observer is waiting through.
+  if (S.mode === "polar") {
     const order = S.wp.map((v, k) => (v ? k : -1)).filter((k) => k >= 0);
-    btn.classList.toggle("cur",
-      st.running && active && order[st.sub.i - 1] === i);
-  });
+    const live = st.running && !st.inSeqGap && !st.inCycGap && !st.finished;
+    const at = order[st.sub.i - 1];
+    $$("#wpgrid button").forEach((btn, i) => {
+      btn.classList.toggle("cur", live && i === at);
+    });
+  } else {
+    $$("#wpgrid button").forEach((btn) => btn.classList.remove("cur"));
+  }
 
   for (const b of BANDS) {
     const c = st.ch[b];
@@ -248,7 +328,7 @@ function refresh({ resolve = false } = {}) {
   if (resolve && !S.manual) {
     const { nexp } = solveNexp(S.tExp, tRead(), S.ft);
     S.nexp = nexp;
-    for (const b of BANDS) $(`[data-n="${b}"]`).value = nexp[b];
+    for (const b of BANDS) $(`#texp [data-n="${b}"]`).value = nexp[b];
   }
   renderSetup();
   renderResult();
@@ -265,11 +345,18 @@ function rocker(sel, fn) {
   });
 }
 
-$("#rate").addEventListener("change", (e) => {
-  S.rate = parseFloat(e.target.value);
+function modeChanged() {
+  // A mode change moves the read time, which can invalidate frame transfer.
+  if (S.ft && BANDS.some((b) => S.tExp[b] < tRead() - 1e-9)) {
+    S.ft = false;
+    $$("#ft button").forEach((x) => x.classList.toggle("on", x.dataset.v === "0"));
+  }
   sim.abort();
   refresh({ resolve: true });
-});
+}
+
+$("#acq").addEventListener("change", (e) => { S.acq = e.target.value; modeChanged(); });
+$("#size").addEventListener("change", (e) => { S.size = e.target.value; modeChanged(); });
 
 rocker("#ft", (v) => {
   S.ft = v === "1";
@@ -318,7 +405,15 @@ $("#texp").addEventListener("input", (e) => {
     sim.abort();
     refresh({ resolve: true });
   } else if (n) {
-    S.nexp[n] = Math.max(1, Math.min(MAX_NEXP, Math.floor(+e.target.value || 1)));
+    const asked = Math.floor(+e.target.value || 1);
+    S.nexp[n] = Math.max(1, Math.min(MAX_NEXP, asked));
+    // Say so rather than silently truncating: the observer typed a number and
+    // deserves to know the instrument will not take it.
+    if (asked > MAX_NEXP) {
+      e.target.value = S.nexp[n];
+      $("#solvenote").textContent =
+        `NEXP is capped at ${MAX_NEXP} per sequence (Guide 5.5). Use more cycles instead.`;
+    }
     sim.abort();
     refresh();
   }
@@ -326,7 +421,7 @@ $("#texp").addEventListener("input", (e) => {
 
 $("#solve").addEventListener("click", () => {
   S.manual = false;
-  $$(`[data-n]`).forEach((x) => (x.disabled = true));
+  $$("#texp [data-n]").forEach((x) => (x.disabled = true));
   $("#solvenote").textContent = "NEXP is the safe knob: it cannot saturate anything.";
   sim.abort();
   refresh({ resolve: true });
@@ -334,11 +429,29 @@ $("#solve").addEventListener("click", () => {
 
 $("#manual").addEventListener("click", () => {
   S.manual = !S.manual;
-  $$(`[data-n]`).forEach((x) => (x.disabled = !S.manual));
+  $$("#texp [data-n]").forEach((x) => (x.disabled = !S.manual));
   $("#solvenote").textContent = S.manual
     ? "Manual NEXP. The cadence is whatever your numbers make it."
     : "NEXP is the safe knob: it cannot saturate anything.";
   refresh({ resolve: !S.manual });
+});
+
+/* Applying an option sets BOTH t_exp and NEXP for that channel. NEXP is then
+ * pinned: re-solving would just undo the choice. */
+$("#opts").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-apply]");
+  if (!btn) return;
+  const b = btn.dataset.apply;
+  S.tExp[b] = +btn.dataset.optT;
+  S.nexp[b] = +btn.dataset.optN;
+  S.manual = true;
+  $$("#texp [data-n]").forEach((x) => (x.disabled = false));
+  $(`#texp [data-t="${b}"]`).value = S.tExp[b];
+  $(`#texp [data-n="${b}"]`).value = S.nexp[b];
+  $("#solvenote").textContent =
+    `Applied to ${b}. NEXP is now manual — press Solve NEXP to start over.`;
+  sim.abort();
+  refresh();
 });
 
 $("#start").addEventListener("click", () => sim.start());

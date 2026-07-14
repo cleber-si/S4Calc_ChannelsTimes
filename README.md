@@ -10,11 +10,14 @@ Two jobs:
    exposures per channel that minimises dead time. NEXP does not change the
    counts in a frame, so it cannot saturate anything: it is the safe knob, and
    it is turned first. A t_exp nudge is offered afterwards, clearly marked as
-   optional.
+   optional — and it offers the neighbouring NEXP values too, so you can
+   choose between fewer/longer frames and more/shorter ones. Every option
+   listed reaches zero dead time; they differ only in what they do to
+   saturation.
 
 2. **Simulate the run.** The progress bars are the ones you will watch in the
    S4GUI. At 1× the clock is real: a 5 s exposure takes 5 seconds. The
-   multiplier scales the clock, not the model.
+   multiplier (up to 120×) scales the clock, not the model.
 
 In polarimetric mode each active waveplate position is one subcycle, up to 16
 per cycle.
@@ -33,14 +36,44 @@ a server; `file://` will not work).
 | `app.js` | DOM wiring. |
 | `index.html`, `style.css` | The panel. |
 
+## Where the numbers come from
+
+Acquisition modes, read times, saturation limits and read noise are taken from
+**`Operation_Modes_SPARC4.xlsx`** (OPD/LNA staff), not from the Observer Guide.
+The Guide's §5.7 table gives read time as a function of readout rate alone and
+warns it is *"overestimated for subframe acquisitions and/or binning"*. The
+staff spreadsheet is the real table: read time depends on
+
+    acquisition mode (rate + preamp)  x  sub-image  x  binning
+
+and the spread matters — at 0.1 MHz it runs from 10.93 s (full frame, bin 1)
+down to 1.24 s (256x256, bin 2), a factor of nine.
+
+Checked against all 84 rows of that sheet:
+
+| check | result |
+|---|---|
+| `max FPS == 1 / read_time` | 84/84 |
+| FT on: `min t_exp == read_time` | 42/42 |
+| FT off: `min t_exp == 1e-5 s` | 42/42 |
+| read noise vs the ETC spreadsheet | identical for all conventional modes |
+
+Saturation is **not** a single value: 30 000 ADU for the BRIGHT (gain 1) modes,
+60 000 for FAINT (gain 2), and only **15 000** for every EM mode.
+
+The 1400-frames-per-sequence cap (Guide 5.5) is below every camera-buffer limit,
+so it is always the binding constraint.
+
 ## Timing
 
-Constants from the SPARC4 Observer Guide (rev. 21-06-2025), §5.4–5.7.
+Cadence and dead times from the SPARC4 Observer Guide (rev. 21-06-2025), §5.4–5.7.
 
 ```
+read_time = READ_TIME[acquisition mode][size mode]     <- the staff table
+
 sequence (one channel):
-  FT off:  NEXP * (t_exp + t_read)
-  FT on :  NEXP * t_exp + (NEXP-1) * 0.0044 + t_read
+  FT off:  NEXP * (t_exp + read_time)
+  FT on :  NEXP * t_exp + (NEXP-1) * 0.0044 + read_time
 
 subcycle = the slowest channel's sequence (the cadence)
 cycle    = NSEQ * subcycle + (NSEQ-1) * dt_seq + dt_cyc

@@ -13,7 +13,7 @@
   <div class="titlebar">
     <span class="dot"></span>
     <span>S4CALC.vi — SPARC4 exposure calculator &amp; acquisition simulator</span>
-    <span class="ver">v1.0</span>
+    <span class="ver">v1.2</span>
   </div>
 
   <div class="body">
@@ -25,13 +25,25 @@
         <h2>Detector setup <span class="hint">global — all four channels</span></h2>
 
         <div class="grid2">
-          <label class="lbl" for="rate">Readout rate</label>
-          <select id="rate" class="sunken">
-            <option value="0.1">0.1 MHz — conventional, slow</option>
-            <option value="1.0" selected>1 MHz — conventional (default)</option>
-            <option value="10.0">10 MHz — EM, fast</option>
-            <option value="20.0">20 MHz — EM, fast+</option>
-            <option value="30.0">30 MHz — EM, super fast</option>
+          <label class="lbl" for="acq">Acquisition mode</label>
+          <select id="acq" class="sunken">
+            <option value="SLOW BRIGHT">SLOW BRIGHT — conv, 0.1 MHz, gain 1</option>
+            <option value="SLOW FAINT">SLOW FAINT — conv, 0.1 MHz, gain 2</option>
+            <option value="NORMAL BRIGHT">NORMAL BRIGHT — conv, 1 MHz, gain 1</option>
+            <option value="NORMAL FAINT" selected>NORMAL FAINT — conv, 1 MHz, gain 2</option>
+            <option value="FAST">FAST — EM, 10 MHz (protected)</option>
+            <option value="FAST+">FAST+ — EM, 20 MHz (protected)</option>
+            <option value="SUPER FAST">SUPER FAST — EM, 30 MHz (protected)</option>
+          </select>
+
+          <label class="lbl" for="size">Size mode</label>
+          <select id="size" class="sunken">
+            <option value="LARGE_1" selected>LARGE 1024² bin 1 — 5.6′, 0.3″/pix</option>
+            <option value="LARGE_2">LARGE 1024² bin 2 — 5.6′, 0.7″/pix</option>
+            <option value="MEDIUM_1">MEDIUM 512² bin 1 — 2.8′, 0.3″/pix</option>
+            <option value="MEDIUM_2">MEDIUM 512² bin 2 — 2.8′, 0.7″/pix</option>
+            <option value="SMALL_1">SMALL 256² bin 1 — 1.4′, 0.3″/pix</option>
+            <option value="SMALL_2">SMALL 256² bin 2 — 1.4′, 0.7″/pix</option>
           </select>
 
           <label class="lbl">Frame transfer</label>
@@ -42,6 +54,9 @@
 
           <label class="lbl">Read time</label>
           <span class="readout sunken" id="tread">1.11 s</span>
+
+          <label class="lbl">Min t_exp · saturation</label>
+          <span class="readout sunken" id="tmin">—</span>
 
           <label class="lbl">Function</label>
           <div class="rocker sunken" id="mode" role="group" aria-label="Function">
@@ -102,6 +117,39 @@
       </div>
 
       <div class="msgs" id="msgs" style="margin-top:8px"></div>
+
+      <details class="gloss">
+        <summary>What the numbers under each channel mean</summary>
+        <dl>
+          <dt>wall</dt>
+          <dd>Wall-clock time this channel's sequence actually takes: its exposures plus
+            every readout it has to pay for. With frame transfer off that is
+            NEXP × (t_exp + read time), so a 0.5 s exposure at 1 MHz really costs 1.61 s.</dd>
+
+          <dt>idle</dt>
+          <dd>How long this channel sits doing nothing, waiting for the slowest channel to
+            finish so the next subcycle can begin. The channel that sets the cadence has
+            zero idle by definition — everyone else is waiting for it. This is the dead
+            time you are trying to get rid of.</dd>
+
+          <dt>duty</dt>
+          <dd>The fraction of the sequence in which the shutter is actually open:
+            (t_exp × NEXP) ÷ wall. Photons only arrive during that fraction. A duty of 45%
+            means more than half the time is being spent reading the chip out rather than
+            collecting light.</dd>
+
+          <dt>cadence</dt>
+          <dd>The length of one subcycle — the wall time of the <em>slowest</em> channel.
+            All four channels are re-synchronised at each subcycle boundary, so the
+            slowest one sets the pace for everybody.</dd>
+        </dl>
+      </details>
+    </section>
+
+    <!-- ================= OPTIONS ================= -->
+    <section class="frame raised">
+      <h2>Closing the gap <span class="hint">optional — this one <em>does</em> touch saturation</span></h2>
+      <div id="opts"></div>
     </section>
 
     <!-- ================= RESULT ================= -->
@@ -143,7 +191,7 @@
             <button type="button" data-v="1" class="on">1×</button>
             <button type="button" data-v="10">10×</button>
             <button type="button" data-v="60">60×</button>
-            <button type="button" data-v="600">600×</button>
+            <button type="button" data-v="120">120×</button>
           </div>
         </div>
       </div>
