@@ -32,9 +32,13 @@ Two jobs:
 In polarimetric mode each active waveplate position is one subcycle, up to 16
 per cycle.
 
-## Local Run
+## Hosting on GitHub Pages
 
-`python3 -m http.server` and open `localhost:8000` (ES modules need
+Push these files to a repo, then Settings → Pages → Source: *Deploy from a
+branch*, branch `main`, folder `/ (root)`. No build step — it is plain ES
+modules.
+
+Locally: `python3 -m http.server` and open `localhost:8000` (ES modules need
 a server; `file://` will not work).
 
 ## Files
@@ -45,6 +49,22 @@ a server; `file://` will not work).
 | `sim.js` | The acquisition clock. Derives all state from a single elapsed time, so speed changes cannot make it drift. |
 | `app.js` | DOM wiring. |
 | `index.html`, `style.css` | The panel. |
+
+## Solving with locks
+
+The solver minimises dead time as a *fraction* of the cadence. A locked channel
+fixes its own NEXP but **not** the cadence: if rounding the fast channels up —
+pushing the cadence slightly past the locked channel, so it waits a little —
+lowers total dead time, the solver does that. Example: photometric, FT on, g
+locked at 15×60 s with r=10 s, i=z=12 s gives **90/75/75**, worst-wait 0.33 s,
+not the 89/74/74 (worst-wait 11.7 s) you get from fitting strictly underneath.
+A lock pins a number, not a ceiling.
+
+## Frame transfer intent
+
+The FT toggle records what you *want*. FT only engages when every exposure is at
+least the read time; below that it stays off and warns, rather than silently
+flipping the toggle back. Raise the exposures and it engages on its own.
 
 ## Where the numbers come from
 

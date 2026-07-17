@@ -5,6 +5,7 @@ import {
   solveNexp, suggestOptions, acquisition, checkLimits, seqTime,
   deadTimes, fmtDuration, readTime, minTexp, maxFPS,
   ACQ_INFO, SIZE_MODES, SATURATION_ADU, READ_NOISE,
+  MAX_FRAMES_BUFFER,
 } from "./s4calc.js";
 import { Sim, PHASE } from "./sim.js";
 
@@ -17,7 +18,7 @@ const BAND_NAME = { g: "g (Sloan g′)", r: "r (Sloan r′)", i: "i (Sloan i′)
 const S = {
   acq: "NORMAL FAINT",       // the common default
   size: "LARGE_1",           // full frame, no binning
-  ft: false,
+  ftWanted: false,           // observer's frame-transfer INTENT
   mode: "phot",
   trigger: "sync",
   ncyc: 1,
@@ -33,12 +34,16 @@ const sim = new Sim();
 /* ---------------- derived ---------------- */
 const tRead = () => readTime(S.acq, S.size);
 const anyLocked = () => BANDS.some((b) => S.lock[b]);
+// FT is only actually engaged if the observer wants it AND every exposure is at
+// least the read time. Below that the instrument cannot frame-transfer.
+const ftBlocked = () => S.ftWanted && BANDS.some((b) => S.tExp[b] < tRead() - 1e-9);
+const ftActive = () => S.ftWanted && !ftBlocked();
 const nseq = () => (S.mode === "polar" ? Math.max(1, S.wp.filter(Boolean).length) : 1);
 
 function cfg() {
   const [dtSeq, dtCyc] = deadTimes(S.mode, S.trigger);
   return {
-    tExp: S.tExp, nexp: S.nexp, tRead: tRead(), ft: S.ft,
+    tExp: S.tExp, nexp: S.nexp, tRead: tRead(), ft: ftActive(),
     acq: S.acq, size: S.size,
     mode: S.mode, trigger: S.trigger,
     ncyc: S.ncyc, nseq: nseq(), dtSeq, dtCyc,
@@ -75,6 +80,13 @@ function buildInputs() {
     <div class="ch sunken" data-m="${b}">
       <h3><span class="band">CH${CH_OF[b]}</span> ${b}<span class="led" data-led="${b}"></span></h3>
       <div class="status" data-st="${b}">IDLE</div>
+      <div class="temprow">
+        <span class="led" data-templed="${b}"></span>
+        <span class="k">CCD</span>
+        <span class="tempval" data-temp="${b}">—</span>
+        <span class="k">target</span>
+        <span class="tempval" data-ttgt="${b}">—</span>
+      </div>
       <div class="bar thin sunken" data-exp="${b}"><span class="fill"></span><span class="txt">—</span></div>
       <div class="bar thin sunken" data-seq="${b}"><span class="fill"></span><span class="txt">—</span></div>
       <div class="row">
@@ -112,7 +124,13 @@ function renderSetup() {
 
   $("#tread").textContent = `${tr} s   (max ${maxFPS(S.acq, S.size).toFixed(2)} fps)`;
   $("#tmin").textContent =
-    `${S.ft ? `${tr} s` : "1e-5 s"}  ·  ${sat.toLocaleString()} ADU`;
+    `${ftActive() ? `${tr} s` : "1e-5 s"}  ·  ${sat.toLocaleString()} ADU`;
+
+  // Keep the FT toggle showing the observer's intent, but reflect whether it is
+  // actually engaged.
+  $$("#ft button").forEach((x) =>
+    x.classList.toggle("on", x.dataset.v === (S.ftWanted ? "1" : "0")));
+  $("#ft").classList.toggle("blocked", ftBlocked());
 
   const isPolar = S.mode === "polar";
   $("#wpframe").style.opacity = isPolar ? "1" : ".5";
@@ -140,10 +158,27 @@ function renderSetup() {
     `${info.em}, ${info.rate} MHz, ${info.preamp} · ${sz.label} · CCD at ${sz.tmin} °C or below · ` +
     `read noise g ${rn.g} / r ${rn.r} / i ${rn.i} / z ${rn.z} e⁻. `;
 
-  note.textContent = base + (S.ft
+  note.textContent = base + (ftBlocked()
+    ? `Frame transfer requested but NOT engaged: ` +
+      BANDS.filter((b) => S.tExp[b] < tRead() - 1e-9).join(", ") +
+      ` ${BANDS.filter((b) => S.tExp[b] < tRead() - 1e-9).length === 1 ? "is" : "are"} below ` +
+      `the ${tr} s read time. Raise those exposures to ${tr} s or larger, or turn FT off.`
+    : ftActive()
     ? `Frame transfer on: every exposure must be at least the ${tr} s read time, and the ` +
       `dead time between exposures drops to ${DT_FT} s.`
     : `Frame transfer off: every exposure pays a full ${tr} s readout.`);
+
+  // CCD target temperature is set by the size mode (binning raises the safe
+  // minimum). Reflect it on the monitor cards even before a run starts.
+  for (const b of BANDS) {
+    const tgt = SIZE_MODES[S.size].tmin;
+    $(`[data-ttgt="${b}"]`).textContent = `${tgt} °C`;
+    // At rest, assume the detector is already parked at target (green).
+    if (!sim.running) {
+      $(`[data-temp="${b}"]`).textContent = `${tgt} °C`;
+      $(`[data-templed="${b}"]`).className = "led on";
+    }
+  }
 }
 
 function renderResult() {
@@ -177,26 +212,50 @@ function renderResult() {
   $("#s-tot").textContent = fmtDuration(a.total);
   $("#s-duty").textContent = `${(a.openFrac * 100).toFixed(0)}%`;
 
-  const totFrames = BANDS.reduce((s, b) => s + a.perCh[b].frames, 0);
+  // frame counts
+  $("#s-fsub").textContent = a.framesPerSubcycle.toLocaleString();
+  $("#s-fcyc").textContent = a.framesPerCycle.toLocaleString();
+  $("#s-ftot").textContent = a.framesTotal.toLocaleString();
+
+  // Rough data volume. Each frame is (rows*cols/bin^2) px x 2 bytes, x4 channels
+  // already counted in the frame totals (framesTotal sums all four channels).
+  const px = { LARGE: 1024 * 1024, MEDIUM: 512 * 512, SMALL: 256 * 256 };
+  const szKey = S.size.split("_")[0];
+  const binsq = S.size.endsWith("_2") ? 4 : 1;
+  const bytesPerFrame = (px[szKey] / binsq) * 2;   // 16-bit
+  const gb = (a.framesTotal * bytesPerFrame) / 1e9;
+  $("#s-vol").textContent = gb >= 1 ? `${gb.toFixed(1)} GB` : `${(gb * 1000).toFixed(0)} MB`;
+
+  // frame breakdown, spelled out for both modes
+  const perChSub = BANDS.map((b) => `${b} ${a.framesSubPerCh[b]}`).join(" · ");
+  $("#framenote").textContent = S.nseq > 1
+    ? `Per subcycle (one waveplate position): ${a.framesPerSubcycle} frames across the four ` +
+      `channels (${perChSub}). ${a.nseq} positions → ${a.framesPerCycle} per cycle. ` +
+      `× ${a.ncyc} cycle${a.ncyc === 1 ? "" : "s"} → ${a.framesTotal.toLocaleString()} total.`
+    : `Photometry, so one subcycle per cycle: ${a.framesPerCycle} frames per cycle across the ` +
+      `four channels (${perChSub}). × ${a.ncyc} cycle${a.ncyc === 1 ? "" : "s"} → ` +
+      `${a.framesTotal.toLocaleString()} total.`;
+
   $("#gatenote").textContent =
     `Cadence is set by ${a.gate} (${a.perCh[a.gate].wall.toFixed(2)} s). ` +
     `${a.deadPerSeq.toFixed(2)} s of channel idle per subcycle; the worst channel waits ` +
-    `${(a.cadence - Math.min(...BANDS.map((b) => a.perCh[b].wall))).toFixed(2)} s. ` +
-    `${a.ncyc} cycle${a.ncyc === 1 ? "" : "s"} × ${a.nseq} subcycle${a.nseq === 1 ? "" : "s"} ` +
-    `→ ${totFrames.toLocaleString()} frames total.`;
+    `${(a.cadence - Math.min(...BANDS.map((b) => a.perCh[b].wall))).toFixed(2)} s.`;
+
+  // buffer table (rendered once, highlighting the active size mode)
+  renderBufferTable();
 
   // messages
   const msgs = [];
   for (const m of checkLimits(c)) {
     msgs.push(`<div class="msg ${m.level === "error" ? "err" : "warn"}">${m.msg}</div>`);
   }
-  if (!S.ft && BANDS.some((b) => S.tExp[b] < tRead())) {
-    const short = BANDS.filter((b) => S.tExp[b] < tRead());
+  if (ftBlocked()) {
+    const short = BANDS.filter((b) => S.tExp[b] < tRead() - 1e-9);
     msgs.push(
-      `<div class="msg">${short.join(", ")} ${short.length === 1 ? "is" : "are"} shorter than the ` +
-      `${tRead()} s read time, so frame transfer is impossible in ${S.acq} / ` +
-      `${SIZE_MODES[S.size].label} and every frame pays a full readout. That is the ` +
-      `price of fast exposures — a smaller size mode or binning would cut the readout.</div>`
+      `<div class="msg warn">Frame transfer is on but cannot engage: ${short.join(", ")} ` +
+      `${short.length === 1 ? "is" : "are"} below the ${tRead()} s read time for ${S.acq} / ` +
+      `${SIZE_MODES[S.size].label}. Running FT-off until raised. A smaller size mode or ` +
+      `binning would lower the read time.</div>`
     );
   }
   $("#msgs").innerHTML = msgs.join("");
@@ -210,7 +269,7 @@ function renderResult() {
       (${a.deadPerSeq.toFixed(2)} s per subcycle across all four channels).
       Nothing else worth doing.</p>`;
   } else {
-    const opts = suggestOptions(S.tExp, S.nexp, tRead(), S.ft, a.cadence, S.lock);
+    const opts = suggestOptions(S.tExp, S.nexp, tRead(), ftActive(), a.cadence, S.lock);
     const rows = [];
     for (const b of BANDS) {
       if (!opts[b]) continue;
@@ -335,6 +394,12 @@ function renderSim(st) {
     $(`[data-fr="${b}"]`).textContent = c.frames.toLocaleString();
     $(`[data-idle="${b}"]`).textContent =
       c.idle > 0.005 ? `idles ${c.idle.toFixed(2)} s per subcycle` : "gates the cadence";
+
+    // CCD held at its target throughout the acquisition -- if it drifted off
+    // target the ACS would not be taking science frames.
+    const tgt = SIZE_MODES[S.size].tmin;
+    $(`[data-temp="${b}"]`).textContent = `${tgt} °C`;
+    $(`[data-templed="${b}"]`).className = "led on";
   }
 
   $("#start").disabled = st.running || st.finished;
@@ -343,13 +408,35 @@ function renderSim(st) {
   $("#start").textContent = st.finished ? "DONE" : (st.t > 0 && !st.running ? "RESUME" : "START");
 }
 
+function renderBufferTable() {
+  const rows = Object.keys(SIZE_MODES).map((k) => {
+    const buf = MAX_FRAMES_BUFFER[k];
+    const eff = Math.min(buf, 1400);
+    const active = k === S.size;
+    return `<tr class="${active ? "cur" : ""}">
+      <td class="bcell">${active ? `<b>${SIZE_MODES[k].label}</b>` : SIZE_MODES[k].label}</td>
+      <td class="num">${buf.toLocaleString()}</td>
+      <td class="num">${eff.toLocaleString()}</td>
+    </tr>`;
+  }).join("");
+  $("#buftable").innerHTML = `
+    <table class="opts">
+      <thead><tr>
+        <th class="b">Size mode</th>
+        <th class="n" title="Camera-buffer ceiling on NEXP">Buffer</th>
+        <th class="n" title="Effective, after the 1400/sequence hard cap">Effective</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 /* ---------------- the one place everything is recomputed ---------------- */
 function refresh({ resolve = false } = {}) {
   // A locked channel keeps its NEXP through every re-solve; the solver fits the
   // others under it. Locks are honoured even in manual mode, because the whole
   // point of a lock is that it survives whatever else changes.
   if (resolve && (!S.manual || anyLocked())) {
-    const { nexp } = solveNexp(S.tExp, tRead(), S.ft, S.nexp, S.lock);
+    const { nexp } = solveNexp(S.tExp, tRead(), ftActive(), S.nexp, S.lock);
     S.nexp = nexp;
     for (const b of BANDS) $(`#texp [data-n="${b}"]`).value = nexp[b];
   }
@@ -369,11 +456,6 @@ function rocker(sel, fn) {
 }
 
 function modeChanged() {
-  // A mode change moves the read time, which can invalidate frame transfer.
-  if (S.ft && BANDS.some((b) => S.tExp[b] < tRead() - 1e-9)) {
-    S.ft = false;
-    $$("#ft button").forEach((x) => x.classList.toggle("on", x.dataset.v === "0"));
-  }
   sim.abort();
   refresh({ resolve: true });
 }
@@ -382,12 +464,11 @@ $("#acq").addEventListener("change", (e) => { S.acq = e.target.value; modeChange
 $("#size").addEventListener("change", (e) => { S.size = e.target.value; modeChanged(); });
 
 rocker("#ft", (v) => {
-  S.ft = v === "1";
-  // The instrument rejects FT when any exposure is below the read time.
-  if (S.ft && BANDS.some((b) => S.tExp[b] < tRead())) {
-    S.ft = false;
-    $$("#ft button").forEach((x) => x.classList.toggle("on", x.dataset.v === "0"));
-  }
+  // Store the observer's INTENT. Whether FT can actually run depends on the
+  // exposures, which they may be about to set. Rather than silently flipping
+  // the toggle back (which strands them if they turn FT on before typing
+  // exposures), we keep the intent and let renderResult warn if it can't hold.
+  S.ftWanted = v === "1";
   sim.abort();
   refresh({ resolve: true });
 });

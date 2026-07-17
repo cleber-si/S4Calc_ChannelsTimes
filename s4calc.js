@@ -140,81 +140,87 @@ export function seqTime(tExp, nExp, tRead, ft) {
 
 /* Choose NEXP per channel to minimise dead time.
  *
- * WITHOUT LOCKS, the anchor is physical: the channel with the LONGEST exposure
- * cannot be subdivided. Its single frame takes what it takes, and that is the
- * shortest sequence in which every channel gets at least one exposure. It sets
- * the floor; the faster channels pack in as many frames as fit underneath.
+ * THE OBJECTIVE, in one sentence: pick a cadence, fit every channel to it as
+ * closely as possible, and choose the cadence that wastes the least time.
  *
- * Minimising ABSOLUTE dead time is degenerate -- a 300 s sequence always beats
- * a 6 s one because the fixed spread gets amortised. So the objective is dead
- * time as a FRACTION of the sequence, which is scale-free.
+ * "Fit to a cadence" means: for each channel, the NEXP whose wall time lands
+ * nearest the cadence WITHOUT going over -- you cannot exceed the cadence, or
+ * the sequence would not finish inside the subcycle. The leftover (cadence
+ * minus wall) is that channel's idle. Total idle across the four channels,
+ * divided by the cadence, is the fractional dead time -- scale-free, so a long
+ * cadence is not unfairly favoured over a short one.
  *
- * WITH LOCKS, the observer has overridden that. A locked channel's NEXP is a
- * given -- maybe the cadence is dictated by the science, maybe a collaborator
- * needs exactly 15 frames -- so its wall time is a hard fact, and the solver's
- * job collapses to a much simpler one: fit everybody else underneath it.
- * The search over candidate ceilings is skipped entirely; the locked wall IS
- * the ceiling. If several channels are locked, the slowest of them wins, since
- * that is the one nobody can finish before.
+ * THE CANDIDATE CADENCES are the wall times themselves: every (channel, NEXP)
+ * pair near the anchor produces a wall, and any of those walls could be the
+ * cadence that everything else fits under. We try them all and keep the best.
  *
- *   locks: { g: true, ... } -- channels whose nexp[] must be taken as given
+ * LOCKS change one thing only: a locked channel's NEXP is fixed, so it does not
+ * get re-fitted. It does NOT fix the cadence. This matters. If the fast
+ * channels land just short of the locked channel's wall, rounding them UP --
+ * pushing the cadence a hair past the lock, so the locked channel itself waits
+ * a little -- can slash total dead time. Example: g locked at 15x60 s (wall
+ * 901.17 s) with r=10 s, i=z=12 s. Fitting strictly under gives 89/74/74 and
+ * 33 s of dead time per cycle. Letting the cadence float up to 901.50 s gives
+ * 90/75/75 and 0.46 s. The locked channel waits 0.33 s; everyone else stops
+ * waiting 11 s. That is the whole job of the tool, so it must be allowed to
+ * happen -- a lock pins a number, not a ceiling.
  */
 export function solveNexp(tExp, tRead, ft, nexp = null, locks = null) {
-  const locked = BANDS.filter((b) => locks?.[b] && nexp?.[b] >= 1);
+  const isLocked = (b) => Boolean(locks?.[b] && nexp?.[b] >= 1);
 
-  if (locked.length) {
-    // The ceiling is the slowest locked channel. Everyone else packs under it.
-    const ceiling = Math.max(
-      ...locked.map((b) => seqTime(tExp[b], nexp[b], tRead, ft))
-    );
+  // Each channel's wall as a function of NEXP. A locked channel has exactly one
+  // allowed value; a free channel can be any NEXP from 1 up.
+  const wallAt = (b, n) => seqTime(tExp[b], n, tRead, ft);
 
+  // The anchor: the shortest cadence in which every channel completes at least
+  // one (locked: its mandated) sequence. Nothing can be faster than this.
+  const anchor = Math.max(
+    ...BANDS.map((b) => (isLocked(b) ? wallAt(b, nexp[b]) : wallAt(b, 1)))
+  );
+
+  // Candidate cadences: every wall time within reach of the anchor, from every
+  // channel. For a locked channel there is only its one wall. Crucially we
+  // include walls slightly ABOVE the anchor, so the cadence can float up past a
+  // locked channel when that pays off.
+  const cadences = new Set([anchor]);
+  for (const b of BANDS) {
+    if (isLocked(b)) {
+      cadences.add(Number(wallAt(b, nexp[b]).toFixed(6)));
+      continue;
+    }
+    for (let n = 1; n <= MAX_NEXP; n++) {
+      const w = wallAt(b, n);
+      if (w > anchor * 1.35) break;
+      if (w >= anchor * 0.90) cadences.add(Number(w.toFixed(6)));
+    }
+  }
+
+  // Fit every channel to a given cadence and score the waste.
+  const fitTo = (cadence) => {
     const out = {};
     for (const b of BANDS) {
-      if (locks?.[b] && nexp?.[b] >= 1) {
-        out[b] = nexp[b];                       // untouched, by definition
-        continue;
-      }
-      // Largest n whose wall still fits inside the ceiling. Never overshoot:
-      // overshooting would push the cadence out past the lock, which would make
-      // the locked channel idle -- the opposite of what the lock is asking for.
+      if (isLocked(b)) { out[b] = nexp[b]; continue; }
+      // largest NEXP whose wall does not exceed the cadence (at least 1)
       let n = 1;
-      while (n < MAX_NEXP && seqTime(tExp[b], n + 1, tRead, ft) <= ceiling + 1e-9) n++;
+      while (n < MAX_NEXP && wallAt(b, n + 1) <= cadence + 1e-9) n++;
       out[b] = n;
     }
-
     const walls = {};
-    for (const b of BANDS) walls[b] = seqTime(tExp[b], out[b], tRead, ft);
-    return { nexp: out, walls, cadence: Math.max(...BANDS.map((b) => walls[b])) };
-  }
-
-  // --- no locks: the original search ---
-  const anchor = Math.max(...BANDS.map((b) => seqTime(tExp[b], 1, tRead, ft)));
-
-  const ceilings = new Set([anchor]);
-  for (const b of BANDS) {
-    for (let n = 1; n <= MAX_NEXP; n++) {
-      const w = seqTime(tExp[b], n, tRead, ft);
-      if (w > anchor * 1.35) break;
-      if (w >= anchor * 0.98) ceilings.add(Number(w.toFixed(6)));
-    }
-  }
+    for (const b of BANDS) walls[b] = wallAt(b, out[b]);
+    // The realised cadence is the slowest wall -- which, if a locked channel
+    // pokes above the trial cadence, may be larger than the trial value.
+    const realCad = Math.max(...BANDS.map((b) => walls[b]));
+    const dead = BANDS.reduce((s, b) => s + (realCad - walls[b]), 0);
+    return { out, walls, realCad, dead, frac: dead / realCad };
+  };
 
   let best = null;
-  for (const ceiling of [...ceilings].sort((a, b) => a - b)) {
-    const out = {};
-    for (const b of BANDS) {
-      let n = 1;
-      while (n < MAX_NEXP && seqTime(tExp[b], n + 1, tRead, ft) <= ceiling + 1e-9) n++;
-      out[b] = n;
-    }
-    const walls = {};
-    for (const b of BANDS) walls[b] = seqTime(tExp[b], out[b], tRead, ft);
-    const cadence = Math.max(...BANDS.map((b) => walls[b]));
-    const dead = BANDS.reduce((s, b) => s + (cadence - walls[b]), 0);
-    const key = [Number((dead / cadence).toFixed(5)), cadence];
+  for (const c of [...cadences].sort((a, b) => a - b)) {
+    const f = fitTo(c);
+    const key = [Number(f.frac.toFixed(6)), f.realCad];
     if (best === null || key[0] < best.key[0] ||
         (key[0] === best.key[0] && key[1] < best.key[1])) {
-      best = { key, nexp: out, walls, cadence };
+      best = { key, nexp: f.out, walls: f.walls, cadence: f.realCad };
     }
   }
   return { nexp: best.nexp, walls: best.walls, cadence: best.cadence };
@@ -343,6 +349,22 @@ export function acquisition(cfg) {
   const deadPerSeq = BANDS.reduce((s, b) => s + (cadence - walls[b]), 0);
   const gate = BANDS.reduce((a, b) => (walls[b] > walls[a] ? b : a));
 
+  // Frame accounting (Guide 5.4). A "frame" is one CCD readout in one channel.
+  //
+  //   per subcycle, per channel = NEXP_b
+  //   per subcycle, all channels = sum of NEXP
+  //   per cycle = per-subcycle x NSEQ   (NSEQ = 1 photometry, = #WP polarimetry)
+  //   whole run = per-cycle x NCYC
+  //
+  // The per-channel breakdown matters because the buffer limit (Guide 5.5) is
+  // checked PER CHANNEL PER SEQUENCE -- it is NEXP that must fit the buffer, not
+  // any of these totals. These are for planning data volume, not limits.
+  const framesSubPerCh = {};
+  for (const b of BANDS) framesSubPerCh[b] = nexp[b];
+  const framesPerSubcycle = BANDS.reduce((s, b) => s + nexp[b], 0);
+  const framesPerCycle = framesPerSubcycle * nseq;
+  const framesTotal = framesPerCycle * ncyc;
+
   // Open-shutter fraction over the whole run, averaged across the 4 channels.
   const openFrac =
     BANDS.reduce((s, b) => s + perCh[b].totalInteg, 0) / (4 * total);
@@ -350,10 +372,14 @@ export function acquisition(cfg) {
   return {
     perCh, cadence, cycle, total, gate, deadPerSeq, openFrac,
     dtSeq, dtCyc, nseq, ncyc,
+    framesSubPerCh, framesPerSubcycle, framesPerCycle, framesTotal,
   };
 }
 
 /* Guide 5.5: the camera buffer caps frames per sequence by sub-image + binning.
+ * Verbatim from the Observer Guide (rev. 21-06-2025) §5.5, "Maximum N. frames",
+ * confirmed against the PDF table on p.17. The relation is non-linear in pixel
+ * count -- these are measured lab values, not a memory-size formula.
  *
  * Note: every one of these is ABOVE the 1400-per-sequence hard cap, so in
  * practice the hard cap always binds first and this check never fires. It is

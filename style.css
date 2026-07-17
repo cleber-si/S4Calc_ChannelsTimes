@@ -159,6 +159,12 @@ input:disabled, select:disabled { background: var(--field-ro); color: var(--ink-
 }
 .rocker button:not(.on):hover { background: var(--panel-light); }
 
+/* FT requested but not engageable: mark the lit button amber, not blue. */
+.rocker.blocked button.on {
+  background: var(--warn);
+  color: #fff;
+}
+
 /* ---- waveplate position selector ----
  *
  * Three states, read as a bulb:
@@ -224,6 +230,13 @@ input:disabled, select:disabled { background: var(--field-ro); color: var(--ink-
 .readout.big { font-size: 15px; font-weight: 700; padding: 5px 7px; }
 
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.framestats { margin-top: 6px; }
+.readout.big.accent {
+  color: var(--bar);
+  font-weight: 800;
+  background: #eef1f9;
+  border-left: 3px solid var(--bar);
+}
 .stat .k {
   font-size: 10px;
   text-transform: uppercase;
@@ -349,6 +362,30 @@ input:disabled, select:disabled { background: var(--field-ro); color: var(--ink-
 .status.act { background: #ffff9a; font-weight: 700; }
 .status.wait { background: #d8dce4; color: var(--ink-mute); }
 .status.done { background: #b7e4c0; font-weight: 700; }
+
+/* CCD temperature readout, echoing the S4GUI's current/target TEMP block */
+.temprow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  padding: 1px 0;
+}
+.temprow .k {
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ink-mute);
+}
+.temprow .tempval {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--led-off);
+  background: #e6f6e9;
+  padding: 0 4px;
+  border: 1px solid var(--panel-dark);
+}
+.temprow .led { width: 8px; height: 8px; }
 
 .ch .row { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
 .ch .cell .k {

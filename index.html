@@ -13,7 +13,7 @@
   <div class="titlebar">
     <span class="dot"></span>
     <span>S4CALC.vi — SPARC4 exposure calculator &amp; acquisition simulator</span>
-    <span class="ver">v1.3</span>
+    <span class="ver">v1.4</span>
   </div>
 
   <div class="body">
@@ -173,7 +173,39 @@
           <span class="readout sunken big" id="s-duty">—</span>
         </div>
       </div>
+
+      <div class="stats framestats">
+        <div class="stat">
+          <div class="k">Frames / subcycle</div>
+          <span class="readout sunken big accent" id="s-fsub">—</span>
+        </div>
+        <div class="stat">
+          <div class="k">Frames / cycle</div>
+          <span class="readout sunken big accent" id="s-fcyc">—</span>
+        </div>
+        <div class="stat">
+          <div class="k">Frames, whole run</div>
+          <span class="readout sunken big accent" id="s-ftot">—</span>
+        </div>
+        <div class="stat">
+          <div class="k">Data volume (est.)</div>
+          <span class="readout sunken big" id="s-vol">—</span>
+        </div>
+      </div>
+
+      <p class="note" id="framenote"></p>
       <p class="note" id="gatenote"></p>
+
+      <details class="gloss">
+        <summary>Maximum frames per sequence, by sub-image and binning (Guide §5.5)</summary>
+        <div id="buftable"></div>
+        <p class="note" style="margin-top:6px">
+          This is the camera-buffer ceiling on NEXP <em>per channel, per sequence</em>. It is not
+          the same as the frames-per-cycle figures above, which count every channel and every
+          waveplate position. The hard limit of 1400 frames per sequence (also §5.5) is below
+          every buffer value, so in practice 1400 is what binds first.
+        </p>
+      </details>
     </section>
 
     <!-- ================= SIMULATOR ================= -->
