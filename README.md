@@ -32,13 +32,9 @@ Two jobs:
 In polarimetric mode each active waveplate position is one subcycle, up to 16
 per cycle.
 
-## Hosting on GitHub Pages
+## Local Run
 
-Push these files to a repo, then Settings → Pages → Source: *Deploy from a
-branch*, branch `main`, folder `/ (root)`. No build step — it is plain ES
-modules.
-
-Locally: `python3 -m http.server` and open `localhost:8000` (ES modules need
+`python3 -m http.server` and open `localhost:8000` (ES modules need
 a server; `file://` will not work).
 
 ## Files
