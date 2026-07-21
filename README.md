@@ -1,4 +1,9 @@
-# S4CALC
+<p align="center">
+  <picture>
+    <source srcset="assets/s4calc-banner.svg" type="image/svg+xml">
+    <img src="assets/s4calc-banner.png" alt="S4CALC" width="100%">
+  </picture>
+</p>
 
 Exposure calculator and acquisition simulator for **SPARC4** (OPD/LNA).
 

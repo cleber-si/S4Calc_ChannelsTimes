@@ -133,7 +133,7 @@ function renderSetup() {
   $("#ft").classList.toggle("blocked", ftBlocked());
 
   const isPolar = S.mode === "polar";
-  $("#wpframe").style.opacity = isPolar ? "1" : ".5";
+  $("#wpframe").classList.toggle("inert", !isPolar);
   $("#wpgrid").classList.toggle("off", !isPolar);
   $$("#wpgrid button, #wave button, .wp-row .mini").forEach((b) => (b.disabled = !isPolar));
 

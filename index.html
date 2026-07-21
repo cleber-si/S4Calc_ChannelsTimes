@@ -11,9 +11,22 @@
 
 <div class="vi">
   <div class="titlebar">
-    <span class="dot"></span>
-    <span>S4CALC.vi — SPARC4 exposure calculator &amp; acquisition simulator</span>
-    <span class="ver">v1.4</span>
+    <picture>
+      <source srcset="assets/s4calc-logo.svg" type="image/svg+xml">
+      <img class="logo" src="assets/s4calc-logo.png"
+           srcset="assets/s4calc-logo.png 1x, assets/s4calc-logo@2x.png 2x"
+           alt="S4CALC" width="191" height="48">
+    </picture>
+    <span class="tagline">SPARC4 exposure calculator &amp; acquisition simulator</span>
+    <span class="ver">v1.5</span>
+  </div>
+
+  <div class="signature">
+    <span>By <strong>Cleber Silva</strong></span>
+    <span class="sep" aria-hidden="true">·</span>
+    <span>UFC/MALTED</span>
+    <span class="sep" aria-hidden="true">·</span>
+    <a href="https://github.com/cleber-si/S4CALC/" target="_blank" rel="noopener">source</a>
   </div>
 
   <div class="body">
@@ -89,6 +102,11 @@
         </div>
 
         <div class="wp sunken" id="wpgrid" role="group" aria-label="Waveplate positions"></div>
+
+        <p class="inert-only" id="wpinert">
+          Photometric mode — the waveplate is parked. Switch to
+          <strong>Polarimetric</strong> to choose positions.
+        </p>
 
         <div class="wp-row">
           <button type="button" class="mini raised" data-wp="all">All 16</button>

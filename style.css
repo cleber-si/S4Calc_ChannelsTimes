@@ -81,35 +81,82 @@ body {
 .titlebar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
+  gap: 12px;
+  padding: 10px 14px;
   background: linear-gradient(#3a4a6b, #26334d);
   color: #fff;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: .02em;
+  border-bottom: 1px solid #1b2438;
 }
-.titlebar .dot { width: 9px; height: 9px; border-radius: 50%; background: #7f96c4; }
+
+/* The logo is the nameplate. Height is fixed so the bar cannot jump while the
+ * image loads; width auto-scales with the artwork's aspect ratio. SVG is
+ * served first, with the PNGs as fallback for anything that refuses it. */
+.titlebar picture { display: block; flex: none; }
+.titlebar .logo {
+  height: 48px;
+  width: auto;
+  display: block;
+  flex: none;
+}
+.titlebar .tagline {
+  font-weight: 400;
+  font-size: 14px;
+  color: #ccd8ec;
+  padding-left: 12px;
+  border-left: 1px solid rgba(255, 255, 255, .22);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .titlebar .ver {
   margin-left: auto;
   font-family: var(--mono);
-  font-weight: 400;
-  font-size: 11px;
-  color: #b9c6e0;
+  font-weight: 700;
+  font-size: 13px;
+  color: #c5d2ea;
+  flex: none;
 }
 
-.body { padding: 10px; display: grid; gap: 10px; }
+/* ---- signature: one line under the masthead. Small type, but generous
+ * padding and letter-spacing so it reads as a considered credit line rather
+ * than fine print crammed against the bar above it. ---- */
+.signature {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 14px;
+  background: #2f3d5c;
+  color: #aab8d2;
+  font-size: 10px;
+  letter-spacing: .07em;
+  border-bottom: 1px solid var(--bevel-lo2);
+}
+.signature strong { font-weight: 700; color: #d7e2f5; }
+.signature .sep { color: #6b7a99; }
+.signature a {
+  color: #cfdcf5;
+  text-decoration: none;
+  border-bottom: 1px dotted #7f96c4;
+}
+.signature a:hover { color: #fff; border-bottom-style: solid; }
+
+.body { padding: 12px; display: grid; gap: 12px; }
 
 /* ---- section frames ---- */
-.frame { padding: 8px 9px 10px; }
+.frame { padding: 10px 12px 12px; }
 .frame > h2 {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
+  padding-bottom: 5px;
   font-size: 13px;
   font-weight: 700;
   letter-spacing: .01em;
   display: flex;
   align-items: baseline;
   gap: 8px;
+  border-bottom: 1px solid var(--panel-dark);
 }
 .frame > h2 .hint {
   font-weight: 400;
@@ -118,9 +165,9 @@ body {
 }
 
 /* ---- top row: setup + acquisition ---- */
-.top { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.top { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
-.grid2 { display: grid; grid-template-columns: auto 1fr; gap: 6px 9px; align-items: center; }
+.grid2 { display: grid; grid-template-columns: auto 1fr; gap: 7px 10px; align-items: center; }
 
 label.lbl { font-size: 12px; white-space: nowrap; }
 
@@ -219,6 +266,28 @@ input:disabled, select:disabled { background: var(--field-ro); color: var(--ink-
   box-shadow: none;
 }
 
+/* ---- inert waveplate panel (photometry) ----
+ *
+ * A disabled 16-button grid is a lot of dead pixels in the top-right corner
+ * for a mode that never uses it. Collapse the grid and the long explanatory
+ * note to a single line; the retarder rocker stays so the panel still reads
+ * as the waveplate panel rather than an empty box.
+ */
+.inert-only { display: none; }
+#wpframe.inert .wp,
+#wpframe.inert .wp-row .mini,
+#wpframe.inert > .note { display: none; }
+#wpframe.inert .inert-only {
+  display: block;
+  font-size: 11px;
+  color: var(--ink-mute);
+  line-height: 1.45;
+  margin: 8px 0 0;
+}
+#wpframe.inert .grid2,
+#wpframe.inert .wp-row { opacity: .55; }
+#wpframe.inert .wp-row { margin-top: 8px; }
+
 /* ---- readouts ---- */
 .readout {
   font-family: var(--mono);
@@ -229,8 +298,8 @@ input:disabled, select:disabled { background: var(--field-ro); color: var(--ink-
 }
 .readout.big { font-size: 15px; font-weight: 700; padding: 5px 7px; }
 
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-.framestats { margin-top: 6px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.framestats { margin-top: 8px; }
 .readout.big.accent {
   color: var(--bar);
   font-weight: 800;
@@ -242,11 +311,14 @@ input:disabled, select:disabled { background: var(--field-ro); color: var(--ink-
   text-transform: uppercase;
   letter-spacing: .05em;
   color: var(--ink-mute);
-  margin-bottom: 2px;
+  margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- transport ---- */
-.transport { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+.transport { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
 .btn {
   font-family: var(--ui);
   font-size: 12px;
@@ -323,15 +395,17 @@ input:disabled, select:disabled { background: var(--field-ro); color: var(--ink-
 .barstack { display: grid; gap: 4px; }
 
 /* ---- channels ---- */
-.channels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.ch { padding: 7px; display: grid; gap: 6px; }
+.channels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.ch { padding: 9px 10px 10px; display: grid; gap: 8px; }
 .ch h3 {
-  margin: 0;
+  margin: 0 0 1px;
+  padding-bottom: 5px;
   font-size: 12px;
   font-weight: 700;
   display: flex;
   align-items: center;
   gap: 6px;
+  border-bottom: 1px solid var(--panel-dark);
 }
 .ch h3 .band {
   font-family: var(--mono);
@@ -436,10 +510,20 @@ input[data-n].locked:disabled {
   text-align: right;
 }
 
-.srcflag { font-weight: 700; letter-spacing: .04em; }
-.srcflag.solved { color: var(--bar); }
-.srcflag.manual { color: var(--warn); }
-.srcflag.locked { color: var(--warn); }
+/* The source flag is a state chip, not shouted text: tinted ground, no
+ * all-caps weight competing with the NEXP value it labels. */
+.srcflag {
+  font-weight: 700;
+  letter-spacing: .04em;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  vertical-align: 1px;
+}
+.srcflag:empty { display: none; }
+.srcflag.solved { color: var(--bar); background: #dde4f4; }
+.srcflag.manual { color: var(--warn); background: #f6e8cc; }
+.srcflag.locked { color: var(--warn); background: #f6e8cc; }
 
 /* ---- the lock control ---- */
 .lockrow {
@@ -602,10 +686,11 @@ table.opts tr.group td { border-top: 1px solid var(--bevel-lo); }
 }
 
 footer {
-  padding: 7px 10px;
+  padding: 10px 12px 4px;
   font-size: 11px;
   color: #d6dbe2;
   text-align: center;
+  line-height: 1.6;
   max-width: 1180px;
   margin: 0 auto;
 }
@@ -616,11 +701,17 @@ footer a { color: #fff; }
   .top { grid-template-columns: 1fr; }
   .channels { grid-template-columns: repeat(2, 1fr); }
 }
+@media (max-width: 760px) {
+  /* Protect the logo: drop the tagline rather than crush the nameplate. */
+  .titlebar .tagline { display: none; }
+}
 @media (max-width: 520px) {
   body { padding: 6px; }
   .channels { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, 1fr); }
   .speed { margin-left: 0; width: 100%; }
+  .titlebar .logo { height: 34px; }
+  .signature { flex-wrap: wrap; row-gap: 2px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
